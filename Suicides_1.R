@@ -7,7 +7,22 @@
 ##########################################
 
 library(readxl)
-library(tidyverse)
+library(tidyr)
+library(tsibble)
+library(forecast)
+library(dplyr)
+library(ggplot2)
+library(zoo)
+library(lubridate)
+library(ggrepel)
+library(ggthemes)
+library(ggalt)
+library(fable)
+library(stringr)
+library(imputeTS)
+library(stats)
+library(feasts)
+library(patchwork)
 
 
 # Importar base de datos --------------------------------------------------
@@ -41,6 +56,63 @@ df2 |>
          codigo_comuna = CODIGO_COMUNA_RESIDENCIA)  |> 
   arrange(fecha_def) |> 
   mutate(ID = 1:38084) |> 
-  select(ID, everything()) -> df2
-View(df2)
+  select(ID, everything()) -> df3
+View(df3)
+
+# Exportamos base procesada a Excel (snippet)
+writexl::write_xlsx(
+x = df3, 
+path = "df3.xlsx", 
+col_names = TRUE)
+
+
+# Análisis serie de tiempo población general ------------------------------
+
+# Transformmos base en objeto tsibble para análisis de serie de tiempo
+# Tsibble 2000-2020
+df3 |> 
+  as_tsibble(
+    index = fecha_def,
+    key = c(ID, edad, sexo, comuna)) -> df3_tsbl
+View(df3_tsbl)
+
+#tsibble para conteo semanal
+df3_tsbl |> 
+  mutate(fecha_sem = yearweek(fecha_def)) |> 
+  index_by(fecha_sem) |> 
+  count() -> df4
+
+df4 |> 
+  as_tsibble(
+    index = fecha_sem
+  ) -> df4
+
+# Graficamos número de muertes semanales 2000-2020
+df4 |> 
+  autoplot(n)
+
+# Muertes por cada semana:
+# Semana 1 (1 de enero), luego la 38 (18 sept) son las que tienen la mayor cantidad de muertes
+df4 |> 
+  gg_subseries(n)
+
+
+# Descomposición aditiva de la serie de tiempo
+df4 |>  
+  model(stl = STL(n)) -> dcmp
+components(dcmp)
+
+# time plot con tendencia
+components(dcmp) |>
+  as_tsibble() |>
+  autoplot(n, colour="gray") +
+  geom_line(aes(y=trend), colour = "#D55E00") +
+  labs(
+    y = "Muertes por suicidio semanales",
+    title = "Número de muertes por suicidio semanales 2000-2020"
+  )
+
+# decomposición aditiva  STL graficada (n, tendencia, estacionalidad, remanentes)
+components(dcmp) |> 
+  autoplot()
 
