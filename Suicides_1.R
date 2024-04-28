@@ -25,6 +25,7 @@ library(feasts)
 library(patchwork)
 
 
+
 # Importar base de datos --------------------------------------------------
 
 # Base de datos de suicidios Chile 2000-2020 (DEIS)
@@ -86,6 +87,7 @@ df4 |>
   as_tsibble(
     index = fecha_sem
   ) -> df4
+View(df4)
 
 # Graficamos número de muertes semanales 2000-2020
 df4 |> 
@@ -110,9 +112,9 @@ components(dcmp) |>
   labs(
     y = "Muertes por suicidio semanales",
     title = "Número de muertes por suicidio semanales 2000-2020"
-  )
+  )  
 
 # decomposición aditiva  STL graficada (n, tendencia, estacionalidad, remanentes)
 components(dcmp) |> 
-  autoplot()
+  autoplot() 
 
