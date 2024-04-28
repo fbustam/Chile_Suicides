@@ -23,6 +23,8 @@ library(imputeTS)
 library(stats)
 library(feasts)
 library(patchwork)
+library(viridis)
+library(pals)
 
 
 
@@ -118,3 +120,31 @@ components(dcmp) |>
 components(dcmp) |> 
   autoplot() 
 
+# Boxplot estacionalidad --------------------------------------------------
+
+#Conteo de muertes por meses
+#tsibble para conteo mensual
+#fct_recode() para recodificar la variable (1=enero)
+#fct_relevel() para cambiar el orden ya que arroja gráfico por orden alfabético
+
+
+df3_tsbl |> 
+  mutate(Month = month(fecha_def)) |>
+  mutate(Month = recode(Month, "1" = "Enero", "2" = "Febrero",
+  "3" = "Marzo","4" = "Abril","5" = "Mayo","6" = "Junio","7" = "Julio",
+  "8" = "Agosto","9" = "Septiembre","10" = "Octubre","11" = "Noviembre",
+  "12" = "Diciembre")) |> 
+  mutate(Month = fct_relevel(Month, "Enero", "Febrero", "Marzo", "Abril", 
+                             "Mayo", "Junio", "Julio", "Agosto",  "Septiembre",
+                             "Octubre", "Noviembre", "Diciembre")) |> 
+  group_by(ano_def) |> 
+  count(Month) -> df5
+View(df5)
+
+
+
+#Graficamos
+df5 |> 
+  ggplot(aes(x=Month, y=n, fill=ano_def)) +
+  geom_boxplot(alpha=0.2) +
+  geom_jitter(show.legend=FALSE, width=0.25, shape=21, color="black") 
