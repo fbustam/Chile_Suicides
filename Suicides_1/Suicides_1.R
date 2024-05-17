@@ -23,6 +23,9 @@ library(imputeTS)
 library(stats)
 library(feasts)
 library(patchwork)
+library(viridis)
+library(pals)
+library(forcats)
 
 
 
@@ -30,7 +33,7 @@ library(patchwork)
 
 # Base de datos de suicidios Chile 2000-2020 (DEIS)
 df2 <- read_excel("df2.xlsx")
-View(df2)
+
 
 # Cambiamos la variable 'fecha de defunción'  a "date", "numeric"
 df2 |> 
@@ -58,7 +61,7 @@ df2 |>
   arrange(fecha_def) |> 
   mutate(ID = 1:38084) |> 
   select(ID, everything()) -> df3
-View(df3)
+
 
 # Exportamos base procesada a Excel (snippet)
 writexl::write_xlsx(
@@ -75,7 +78,7 @@ df3 |>
   as_tsibble(
     index = fecha_def,
     key = c(ID, edad, sexo, comuna)) -> df3_tsbl
-View(df3_tsbl)
+
 
 #tsibble para conteo semanal
 df3_tsbl |> 
@@ -87,7 +90,7 @@ df4 |>
   as_tsibble(
     index = fecha_sem
   ) -> df4
-View(df4)
+
 
 # Graficamos número de muertes semanales 2000-2020
 df4 |> 
@@ -118,3 +121,54 @@ components(dcmp) |>
 components(dcmp) |> 
   autoplot() 
 
+# Boxplot estacionalidad --------------------------------------------------
+
+#Conteo de muertes por meses
+#tsibble para conteo mensual
+#fct_recode() para recodificar la variable (1=enero)
+#fct_relevel() para cambiar el orden ya que arroja gráfico por orden alfabético
+
+
+df3_tsbl |> 
+  mutate(Month = month(fecha_def)) |>
+  mutate(Month = recode(Month, "1" = "Enero", "2" = "Febrero",
+  "3" = "Marzo","4" = "Abril","5" = "Mayo","6" = "Junio","7" = "Julio",
+  "8" = "Agosto","9" = "Septiembre","10" = "Octubre","11" = "Noviembre",
+  "12" = "Diciembre")) |> 
+  mutate(Month = fct_relevel(Month, "Enero", "Febrero", "Marzo", "Abril", 
+                             "Mayo", "Junio", "Julio", "Agosto",  "Septiembre",
+                             "Octubre", "Noviembre", "Diciembre")) |> 
+  group_by(ano_def) |> 
+  count(Month) -> df5
+View(df5)
+
+#Graficamos
+df5 |> 
+  ggplot(aes(x=Month, y=n, fill=ano_def)) +
+  geom_boxplot(alpha=0.2) +
+  geom_jitter(show.legend=FALSE, width=0.15, shape=21, color="black", inherit.aes = TRUE) +
+  scale_y_continuous(n.breaks = 15) 
+
+#Graficamos pero con texto  
+df5 |> 
+  ggplot(aes(x=Month, y=n)) +
+  geom_boxplot(alpha=0.2) +
+  geom_jitter(aes(color = ifelse(n < 200, "red","black")), show.legend=FALSE, width=0.15, shape=21) +
+  scale_y_continuous(n.breaks = 15) +
+  geom_text_repel(
+    aes(label=ano_def), max.overlaps = 1, nudge_x = 0.1, 
+    direction = "y", hjust = "left") 
+
+#Graficamos pero con texto  
+df5 |> 
+  ggplot(aes(x=Month, y=n)) +
+  geom_boxplot(alpha=0.2, outlier.shape = NA) +
+  geom_jitter(aes(color = ifelse(n >= 190 | n<= 120, "#D22B2B","#4169E1")), width = 0.2) +
+  scale_y_continuous(n.breaks = 15) +
+  scale_color_identity() +
+  geom_text_repel(size = 3, aes(x = Month, y = n, 
+                          label = ifelse(n >= 190, df5$ano_def, "")),
+            nudge_x = 0.3, nudge_y = 0.2, hjust = 0.2, segment.color = NA) +
+  geom_text_repel(size = 3, aes(x = Month, y = n, 
+                          label = ifelse(n <= 120, df5$ano_def, "")),
+            nudge_x = 0.3, nudge_y = 0.2, hjust = 0.4, check_overlap = TRUE, segment.color = NA)
