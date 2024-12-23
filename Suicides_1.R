@@ -406,7 +406,8 @@ ggplot(combined_data, aes(x = as.Date(fecha_sem))) +
 
 
 # Efecto pandemia ---------------------------------------------------------
-# --- Configuración inicial ---
+
+# --- Librerías ---
 library(tsibble)
 library(fable)
 library(feasts)
@@ -415,8 +416,10 @@ library(dplyr)
 library(ggplot2)
 library(purrr)
 library(distributional)
+library(gt)
 
-# --- Preparación de datos ---
+# --- Configuración inicial ---
+# Preparación de datos
 df6 <- df5 %>%
   mutate(fecha_sem = as.Date(fecha_sem))  # Asegurar formato Date
 
@@ -445,7 +448,7 @@ fecha_corte <- as.Date("2020-01-01")
 entrenamiento <- df6_tsibble %>% filter(fecha_sem < fecha_corte)
 evaluacion <- df6_tsibble %>% filter(fecha_sem >= fecha_corte)
 
-# --- Modelado SARIMA en el conjunto de entrenamiento ---
+# --- Modelado SARIMA ---
 model_sarima <- entrenamiento %>%
   model(SARIMA = ARIMA(n ~ pdq(0, 1, 1) + PDQ(0, 1, 1, 52)))
 
@@ -486,109 +489,63 @@ combined_data <- bind_rows(
     mutate(tipo = "Pronosticado")
 )
 
-# --- Graficar ---
+# --- Graficar serie completa ---
 ggplot() +
-  # Línea histórica
   geom_line(data = combined_data %>% filter(tipo == "Histórico"), 
             aes(x = fecha_sem, y = n, color = tipo), size = 1) +
-  # Línea observada
   geom_line(data = combined_data %>% filter(tipo == "Observado"), 
             aes(x = fecha_sem, y = n, color = tipo), size = 1) +
-  # Línea proyectada
   geom_line(data = combined_data %>% filter(tipo == "Pronosticado"), 
             aes(x = fecha_sem, y = n, color = tipo), size = 1) +
-  # Intervalos de confianza para la proyección
   geom_ribbon(data = combined_data %>% filter(tipo == "Pronosticado"),
               aes(x = fecha_sem, ymin = .lower, ymax = .upper), 
               fill = "blue", alpha = 0.2) +
-  # Etiquetas y estilo
   labs(
     title = "Serie Observada y Pronosticada con Intervalos de Confianza",
     x = "Fecha",
-    y = "Valor de la Serie Temporal",
+    y = "Número de muertes semanales",
     color = "Tipo de Datos"
   ) +
   scale_color_manual(values = c("Histórico" = "black", "Observado" = "red", "Pronosticado" = "blue")) +
   theme_minimal()
 
-# ITS pandemia pero desde el 2015 -----------------------------------------
-
-library(ggplot2)
-
-# Filtrar los datos combinados desde el 2015-01-01 en adelante
+# --- Filtrar serie desde 2015 ---
 combined_data_filtered <- combined_data %>%
   filter(fecha_sem >= as.Date("2015-01-01"))
 
-# Crear el gráfico actualizado
+# Graficar serie filtrada
 ggplot() +
-  # Línea histórica
   geom_line(data = combined_data_filtered %>% filter(tipo == "Histórico"), 
             aes(x = fecha_sem, y = n, color = tipo), size = 1) +
-  # Línea observada
   geom_line(data = combined_data_filtered %>% filter(tipo == "Observado"), 
             aes(x = fecha_sem, y = n, color = tipo), size = 1) +
-  # Línea proyectada
   geom_line(data = combined_data_filtered %>% filter(tipo == "Pronosticado"), 
             aes(x = fecha_sem, y = n, color = tipo), size = 1) +
-  # Intervalos de confianza para la proyección
   geom_ribbon(data = combined_data_filtered %>% filter(tipo == "Pronosticado"),
               aes(x = fecha_sem, ymin = .lower, ymax = .upper), fill = "blue", alpha = 0.2) +
-  # Etiquetas y estilo
   labs(
-    title = "Serie Observada y Pronosticada con Intervalos de Confianza (Desde 2015-01-01)",
+    title = "Serie Observada y Pronosticada con Intervalos de Confianza (Desde 2015)",
     x = "Fecha",
-    y = "Valor de la Serie Temporal",
+    y = "Número de muertes semanales",
     color = "Tipo de Datos"
   ) +
   scale_color_manual(values = c("Histórico" = "black", "Observado" = "red", "Pronosticado" = "blue")) +
   theme_minimal()
 
-# qué observaciones se salen de los intervalos de confianza?
-# Revisar estructura de combined_data
-glimpse(combined_data)
-
-# Verificar datos para tipo "Pronosticado"
-combined_data %>%
-  filter(tipo == "Pronosticado") %>%
-  select(fecha_sem, n, .lower, .upper) %>%
-  head()
-
+# --- Identificar observaciones fuera del intervalo de confianza ---
 fuera_intervalo <- combined_data %>%
-  # Filtrar observaciones reales
   filter(tipo == "Observado") %>%
-  # Unir con los intervalos de confianza
   left_join(
     combined_data %>%
       filter(tipo == "Pronosticado") %>%
       select(fecha_sem, .lower, .upper),
     by = "fecha_sem"
   ) %>%
-  # Filtrar cuando las observaciones estén fuera del intervalo
   filter(n < .lower | n > .upper)
 
-joined_data <- combined_data %>%
-  filter(tipo == "Observado") %>%
-  left_join(
-    combined_data %>%
-      filter(tipo == "Pronosticado") %>%
-      select(fecha_sem, .lower, .upper),
-    by = "fecha_sem"
-  )
-
-glimpse(joined_data)  # Verifica si `.lower` y `.upper` están presentes
-
-#Valores fuera del intervalo
-fuera_intervalo <- joined_data %>%
-  select(fecha_sem, n, tipo, .lower = .lower.y, .upper = .upper.y) %>%
-  filter(n < .lower | n > .upper)
-print(fuera_intervalo)
-
-library(gt)
-# Crear la tabla con gt
-
-# Crear la tabla con los ajustes solicitados
+# --- Crear tabla con observaciones fuera del intervalo ---
 fuera_intervalo %>%
-  select(-tipo) %>%  # Eliminar la columna "tipo"
+  select(-tipo) %>%
   gt() %>%
   tab_header(
     title = "Observaciones Fuera del Intervalo de Confianza",
@@ -600,14 +557,9 @@ fuera_intervalo %>%
     .lower = "Límite Inferior",
     .upper = "Límite Superior"
   ) %>%
-  fmt_number(
-    columns = c(n, .lower, .upper),
-    decimals = 3
-  ) %>%
+  fmt_number(columns = c(n, .lower, .upper), decimals = 3) %>%
   tab_style(
     style = cell_text(weight = "bold", color = "red"),
-    locations = cells_body(
-      columns = n,
-      rows = n < 0  # Resalta solo los valores negativos
-    )
+    locations = cells_body(columns = n, rows = n < 0)  # Resaltar valores negativos
   )
+
