@@ -313,115 +313,414 @@ tabla_gt <- final_table %>%
 
 
 # Análisis de ITS ---------------------------------------------------------
+# Librerías ---------------------------------------------------------------
+# --- Configuración inicial ---
 library(tsibble)
 library(fable)
 library(feasts)
 library(forecast)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(distributional)
 
-# Revisa el tipo y los valores de fecha_sem
-str(df5$fecha_sem)
-unique(class(df5$fecha_sem))
-
-# Convertir fecha_sem a tipo Date
+# --- Preparación de datos ---
 df5 <- df5 %>%
-  mutate(fecha_sem = as.Date(fecha_sem, frac = 0))
+  mutate(fecha_sem = as.Date(fecha_sem))  # Asegurar formato Date
 
-# Detectar duplicados o inconsistencias
-df5 %>%
-  count(fecha_sem) %>%
-  filter(n > 1)
-
-# Eliminar valores NA en fecha_sem
-df5 <- df5 %>%
-  filter(!is.na(fecha_sem))
-
-# Convertir a yearweek
-df5 <- df5 %>%
-  mutate(fecha_sem = yearweek(fecha_sem))
-
-# Crear el tsibble
+# Crear tsibble regular
 df5_tsibble <- df5 %>%
-  as_tsibble(index = fecha_sem)
-# Verificar estructura
-glimpse(df5_tsibble)
+  as_tsibble(index = fecha_sem, regular = TRUE)
 
-# Completar fechas faltantes con NA
-df5_tsibble <- df5_tsibble %>%
-  fill_gaps(n = NA)
+# Verificar regularidad y lagunas
+if (!is_regular(df5_tsibble)) {
+  stop("El tsibble no es regular.")
+}
+scan_gaps(df5_tsibble)
 
-df5_tsibble <- df5_tsibble %>%
-  ungroup()
-
-# Verificar la regularidad del índice
-interval(df5_tsibble)
-
-
-# Descomponer la serie temporal
-df5_tsibble %>%
-  model(STL(n ~ season(window = "periodic"))) %>%
-  components() %>%
-  autoplot()
-
-# Análisis de autocorrelación
-df5_tsibble %>%
-  ACF(n) %>%
-  autoplot()
-
-
-# Prueba de Shapiro-Wilk
-shapiro.test(residuals(model_sarima)$.resid)
-
-
-lambda <- BoxCox.lambda(df5$n)  # Encuentra el lambda óptimo
-df5$valor <- BoxCox(df5$n, lambda)
-
-model_sarima_adj <- df5_tsibble %>%
-  model(ARIMA(n ~ pdq(1,1,1) + PDQ(1,1,1,12)))
-
-
-# Vamos a trasnformar los datos porque distribución anormal y autocorrelación fuerte
-
-
-# Transformar los datos con Box-Cox
+# --- Transformación Box-Cox ---
 lambda <- BoxCox.lambda(df5$n)
-df5$n <- BoxCox(df5$n, lambda)
-
-# Crear un tsibble con los datos transformados
+df5 <- df5 %>%
+  mutate(
+    n = BoxCox(n, lambda),
+    valor = n  # Guardar la transformación
+  )
 df5_tsibble <- df5 %>%
   as_tsibble(index = fecha_sem)
 
-
-# Ajustar SARIMA automáticamente después de Box-Cox
+# --- Modelado SARIMA ---
 model_sarima_auto <- df5_tsibble %>%
   model(SARIMA = ARIMA(n))
 
-# Ajustar SARIMA con constante explícita
-model_sarima_adj <- df5_tsibble %>%
-  model(SARIMA = ARIMA(valor ~ pdq(1,1,1) + PDQ(1,1,1,12) + 1))
-
+# Informe del modelo
 report(model_sarima_auto)
 
-# Vemos patrón de los residuos (distribución ahora es normal y autocorrelación baja)
+# Verificar residuos
 gg_tsresiduals(model_sarima_auto)
 shapiro.test(residuals(model_sarima_auto)$.resid)
 
+# --- Pronóstico ---
+forecasted <- model_sarima_auto %>%
+  forecast(h = 52)
+
+# Calcular intervalos de confianza
+forecasted <- forecasted %>%
+  mutate(
+    .lower = .mean - 1.96 * map_dbl(n, ~ parameters(.x)$sigma),
+    .upper = .mean + 1.96 * map_dbl(n, ~ parameters(.x)$sigma)
+  )
+
+# --- Combinar datos históricos y proyección ---
+combined_data <- bind_rows(
+  df5_tsibble %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Histórico"),
+  forecasted %>%
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%
+    mutate(tipo = "Proyección")
+)
+
+# --- Visualización ---
+ggplot(combined_data, aes(x = as.Date(fecha_sem))) +
+  # Línea histórica
+  geom_line(data = combined_data %>% filter(tipo == "Histórico"),
+            aes(y = n, color = tipo), linewidth = 1) +
+  # Línea proyectada
+  geom_line(data = combined_data %>% filter(tipo == "Proyección"),
+            aes(y = n, color = tipo), linewidth = 1) +
+  # Intervalo de confianza
+  geom_ribbon(data = combined_data %>% filter(tipo == "Proyección"),
+              aes(ymin = .lower, ymax = .upper), fill = "blue", alpha = 0.2) +
+  # Etiquetas y estilo
+  labs(
+    title = "Serie Histórica y Proyección con Intervalos de Confianza",
+    x = "Semana",
+    y = "Valor de la Serie Temporal",
+    color = "Tipo de Datos"
+  ) +
+  scale_color_manual(values = c("Histórico" = "black", "Proyección" = "blue")) +
+  theme_minimal()
+
+
+
+
+# Efecto pandemia ---------------------------------------------------------
+
+# --- Configuración inicial ---
+library(tsibble)
+library(fable)
+library(feasts)
+library(forecast)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(distributional)
+
+# --- Preparación de datos ---
+df6 <- df5 %>%
+  mutate(fecha_sem = as.Date(fecha_sem))  # Asegurar formato Date
+
+# Crear tsibble regular
+df6_tsibble <- df6 %>%
+  as_tsibble(index = fecha_sem, regular = TRUE)
+
+# Verificar regularidad y lagunas
+if (!is_regular(df6_tsibble)) {
+  stop("El tsibble no es regular.")
+}
+scan_gaps(df6_tsibble)
+
+# --- Transformación Box-Cox ---
+lambda <- BoxCox.lambda(df6$n)
+df6 <- df6 %>%
+  mutate(
+    n = BoxCox(n, lambda),
+    valor = n  # Guardar la transformación
+  )
+df6_tsibble <- df6 %>%
+  as_tsibble(index = fecha_sem)
+
+# --- Corte de la serie temporal ---
+fecha_corte <- as.Date("2020-01-01")
+entrenamiento <- df6_tsibble %>% filter(fecha_sem < fecha_corte)
+evaluacion <- df6_tsibble %>% filter(fecha_sem >= fecha_corte)
+
+# --- Modelado SARIMA en el conjunto de entrenamiento ---
+model_sarima <- entrenamiento %>%
+  model(SARIMA = ARIMA(n))
+
+# Informe del modelo
+report(model_sarima)
+
+# Generar pronóstico a partir del modelo entrenado
+h <- nrow(evaluacion)  # Longitud del horizonte
+forecasted <- model_sarima %>%
+  forecast(h = h)
+
+# Calcular intervalos de confianza
+forecasted <- forecasted %>%
+  mutate(
+    .lower = .mean - 1.96 * map_dbl(n, ~ parameters(.x)$sigma),
+    .upper = .mean + 1.96 * map_dbl(n, ~ parameters(.x)$sigma)
+  )
+
+# --- Combinar datos observados y predicciones ---
+combined_data <- bind_rows(
+  entrenamiento %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Histórico"),
+  evaluacion %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Observado"),
+  forecasted %>%
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%
+    mutate(tipo = "Pronosticado")
+)
+
+# --- Visualización ---
+ggplot(combined_data, aes(x = as.Date(fecha_sem))) +
+  # Línea histórica
+  geom_line(data = combined_data %>% filter(tipo == "Histórico"),
+            aes(y = n, color = tipo), linewidth = 1) +
+  # Línea observada
+  geom_line(data = combined_data %>% filter(tipo == "Observado"),
+            aes(y = n, color = tipo), linewidth = 1) +
+  # Línea proyectada
+  geom_line(data = combined_data %>% filter(tipo == "Pronosticado"),
+            aes(y = n, color = tipo), linewidth = 1) +
+  # Intervalo de confianza
+  geom_ribbon(data = combined_data %>% filter(tipo == "Pronosticado"),
+              aes(ymin = .lower, ymax = .upper), fill = "blue", alpha = 0.2) +
+  # Etiquetas y estilo
+  labs(
+    title = "Serie Observada y Pronosticada con Intervalos de Confianza",
+    x = "Semana",
+    y = "Valor de la Serie Temporal",
+    color = "Tipo de Datos"
+  ) +
+  scale_color_manual(values = c(
+    "Histórico" = "black",
+    "Observado" = "green",
+    "Pronosticado" = "blue"
+  )) +
+  theme_minimal()
+
+# --- Convertir todo a tibbles antes de combinar ---
+combined_data <- bind_rows(
+  # Datos históricos
+  entrenamiento %>%
+    as_tibble() %>%  # Convertir a tibble
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Histórico"),
+  
+  # Datos observados
+  evaluacion %>%
+    as_tibble() %>%  # Convertir a tibble
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Observado"),
+  
+  # Pronósticos
+  forecasted %>%
+    as_tibble() %>%  # Convertir a tibble
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%
+    mutate(tipo = "Pronosticado")
+)
+
+# --- Verificar estructura combinada ---
+print(head(combined_data))
+print(unique(combined_data$tipo))
+
+
+library(ggplot2)
+
+ggplot(combined_data, aes(x = fecha_sem, y = n, color = tipo)) +
+  # Línea histórica
+  geom_line(data = combined_data %>% filter(tipo == "Histórico"), size = 1) +
+  # Línea observada
+  geom_line(data = combined_data %>% filter(tipo == "Observado"), size = 1) +  # Línea continua
+  # Línea proyectada
+  geom_line(data = combined_data %>% filter(tipo == "Pronosticado"), size = 1) +
+  # Intervalos de confianza para la proyección
+  geom_ribbon(
+    data = combined_data %>% filter(tipo == "Pronosticado"),
+    aes(x = fecha_sem, ymin = .lower, ymax = .upper),  # Añade `x = fecha_sem`
+    fill = "blue", alpha = 0.2, inherit.aes = FALSE
+  ) +
+  # Etiquetas y estilo
+  labs(
+    title = "Serie Observada y Pronosticada con Intervalos de Confianza",
+    x = "Fecha",
+    y = "Valor de la Serie Temporal",
+    color = "Tipo de Datos"
+  ) +
+  scale_color_manual(values = c("Histórico" = "black", "Observado" = "red", "Pronosticado" = "blue")) +
+  theme_minimal()
+
+
+
+# --- Crear datos combinados correctamente ---
+combined_data <- bind_rows(
+  # Datos históricos
+  entrenamiento %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Histórico"),
+  
+  # Datos observados
+  evaluacion %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Observado"),
+  
+  # Pronósticos
+  forecasted %>%
+    as_tibble() %>%  # Convertir a tibble
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%  # Asegurar que `n` sea el promedio pronosticado
+    mutate(tipo = "Pronosticado")
+)
+
+# --- Crear datos combinados correctamente ---
+combined_data <- bind_rows(
+  # Datos históricos
+  entrenamiento %>%
+    as_tibble() %>%  # Asegurar que sea tibble
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Histórico"),
+  
+  # Datos observados
+  evaluacion %>%
+    as_tibble() %>%  # Asegurar que sea tibble
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Observado"),
+  
+  # Pronósticos
+  forecasted %>%
+    as_tibble() %>%  # Convertir a tibble
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%  # Asegurar que `n` sea el promedio pronosticado
+    mutate(tipo = "Pronosticado")
+)
+glimpse(combined_data)
+
+library(ggplot2)
+
+library(ggplot2)
+
+ggplot(combined_data, aes(x = fecha_sem, y = n, color = tipo)) +
+  # Línea histórica
+  geom_line(data = combined_data %>% filter(tipo == "Histórico"), size = 1) +
+  # Línea observada
+  geom_line(data = combined_data %>% filter(tipo == "Observado"), size = 1) +
+  # Línea proyectada
+  geom_line(data = combined_data %>% filter(tipo == "Pronosticado"), size = 1) +
+  # Intervalos de confianza para la proyección
+  geom_ribbon(
+    data = combined_data %>% filter(tipo == "Pronosticado"),
+    aes(x = fecha_sem, ymin = .lower, ymax = .upper),  # Asegura que estas estéticas están definidas
+    fill = "blue", alpha = 0.2, inherit.aes = FALSE
+  ) +
+  # Etiquetas y estilo
+  labs(
+    title = "Serie Observada y Pronosticada con Intervalos de Confianza",
+    x = "Fecha",
+    y = "Valor de la Serie Temporal",
+    color = "Tipo de Datos"
+  ) +
+  scale_color_manual(values = c("Histórico" = "black", "Observado" = "red", "Pronosticado" = "blue")) +
+  theme_minimal()
+
+glimpse(forecasted)
+glimpse(combined_data)
+
+head(forecasted)
+summary(forecasted$.mean)
+report(model_sarima_auto)
+
+model_sarima_custom <- df6_tsibble %>%
+  model(SARIMA = ARIMA(n ~ pdq(0,1,1) + PDQ(0,1,1,52)))
+model_sarima_auto <- df6_tsibble %>%
+  model(SARIMA = ARIMA(n, stepwise = FALSE, approximation = FALSE))
+model_ets <- df6_tsibble %>%
+  model(ETS = ETS(n))
 gg_tsresiduals(model_sarima_auto)
+# Generar pronósticos para las próximas 52 semanas
+forecasted <- model_sarima_auto %>%
+  forecast(h = 52)
 
+combined_data <- bind_rows(
+  # Datos históricos
+  entrenamiento %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Histórico"),
+  
+  # Datos observados
+  evaluacion %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Observado"),
+  
+  # Pronósticos
+  forecasted %>%
+    as_tibble() %>%
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%
+    mutate(tipo = "Pronosticado")
+)
+colnames(forecasted)
 
-df5_tsibble <- df5_tsibble %>%
-  ungroup()
-glimpse(df5_tsibble)
-interval(df5_tsibble)
+library(distributional)
+library(purrr)
 
+# Calcular los intervalos de confianza
+forecasted <- forecasted %>%
+  mutate(
+    .lower = .mean - 1.96 * map_dbl(n, ~ parameters(.x)$sigma), # Límite inferior
+    .upper = .mean + 1.96 * map_dbl(n, ~ parameters(.x)$sigma)  # Límite superior
+  )
+colnames(forecasted)
 
-# Verifica lagunas en el índice
-scan_gaps(df5_tsibble)
+combined_data <- bind_rows(
+  # Datos históricos
+  entrenamiento %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Histórico"),
+  
+  # Datos observados
+  evaluacion %>%
+    select(fecha_sem, n) %>%
+    mutate(tipo = "Observado"),
+  
+  # Pronósticos
+  forecasted %>%
+    as_tibble() %>%
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%
+    mutate(tipo = "Pronosticado")
+)
+glimpse(combined_data)
 
-# Verificar regularidad del tsibble
-is_regular(df5_tsibble)
+library(ggplot2)
 
-# Revisar valores únicos del índice
-unique(df5_tsibble$fecha_sem)
-
-# Verificar regularidad del tsibble
-is_regular(df5_tsibble)  # Esto debería devolver TRUE
+ggplot() +
+  # Línea histórica
+  geom_line(data = combined_data %>% filter(tipo == "Histórico"), 
+            aes(x = fecha_sem, y = n, color = tipo), size = 1) +
+  # Línea observada
+  geom_line(data = combined_data %>% filter(tipo == "Observado"), 
+            aes(x = fecha_sem, y = n, color = tipo), size = 1) +
+  # Línea proyectada
+  geom_line(data = combined_data %>% filter(tipo == "Pronosticado"), 
+            aes(x = fecha_sem, y = n, color = tipo), size = 1) +
+  # Intervalos de confianza para la proyección
+  geom_ribbon(data = combined_data %>% filter(tipo == "Pronosticado"),
+              aes(x = fecha_sem, ymin = .lower, ymax = .upper), fill = "blue", alpha = 0.2) +
+  # Etiquetas y estilo
+  labs(
+    title = "Serie Observada y Pronosticada con Intervalos de Confianza",
+    x = "Fecha",
+    y = "Valor de la Serie Temporal",
+    color = "Tipo de Datos"
+  ) +
+  scale_color_manual(values = c("Histórico" = "black", "Observado" = "red", "Pronosticado" = "blue")) +
+  theme_minimal()
