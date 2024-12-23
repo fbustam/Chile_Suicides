@@ -30,7 +30,7 @@ library(patchwork)
 
 # Base de datos de suicidios Chile 2000-2020 (DEIS)
 df2 <- read_excel("df2.xlsx")
-View(df2)
+
 
 # Cambiamos la variable 'fecha de defunción'  a "date", "numeric"
 df2 |> 
@@ -58,7 +58,7 @@ df2 |>
   arrange(fecha_def) |> 
   mutate(ID = 1:38084) |> 
   select(ID, everything()) -> df3
-View(df3)
+
 
 # Exportamos base procesada a Excel (snippet)
 writexl::write_xlsx(
@@ -75,7 +75,7 @@ df3 |>
   as_tsibble(
     index = fecha_def,
     key = c(ID, edad, sexo, comuna)) -> df3_tsbl
-View(df3_tsbl)
+
 
 #tsibble para conteo semanal
 df3_tsbl |> 
@@ -87,7 +87,9 @@ df4 |>
   as_tsibble(
     index = fecha_sem
   ) -> df4
-View(df4)
+
+
+df5 <- df4
 
 # Graficamos número de muertes semanales 2000-2020
 df4 |> 
@@ -98,7 +100,7 @@ df4 |>
 df4 |> 
   gg_subseries(n)
 
-
+glimpse(df3)
 # Descomposición aditiva de la serie de tiempo
 df4 |>  
   model(stl = STL(n)) -> dcmp
@@ -117,14 +119,10 @@ components(dcmp) |>
 # decomposición aditiva  STL graficada (n, tendencia, estacionalidad, remanentes)
 components(dcmp) |> 
   autoplot() 
-View(df3)
+
 
 # Modelamiento con cambio estructural -------------------------------------
 
-# Instalar y cargar paquetes necesarios
-if (!require("strucchange")) install.packages("strucchange")
-if (!require("ggplot2")) install.packages("ggplot2")
-if (!require("dplyr")) install.packages("dplyr")
 
 library(strucchange)
 library(ggplot2)
@@ -135,9 +133,7 @@ library(writexl)
 time_series <- df4$n
 
 ts_data <- ts(time_series, start = c(2000, 1), frequency = 12)  # Ajusta el inicio y frecuencia según tus datos
-write_xlsx(df4, path = "df4")
 
-View(df4)
 # Análisis de cambio estructural
 breakpoints_model <- breakpoints(ts_data ~ 1)  # Modelo con intercepto
 breakpoints <- breakpoints_model$breakpoints  # Identificar puntos de cambio
@@ -314,10 +310,118 @@ tabla_gt <- final_table %>%
     R2 = "R²"
   )
 
-print(tabla_gt)
 
-# Exportar la tabla como PDF
-gtsave(tabla_gt, "resultados_modelamiento.pdf")
 
-# Exportar la tabla como PNG
-gtsave(tabla_gt, "resultados_modelamiento.png")
+# Análisis de ITS ---------------------------------------------------------
+library(tsibble)
+library(fable)
+library(feasts)
+library(forecast)
+
+# Revisa el tipo y los valores de fecha_sem
+str(df5$fecha_sem)
+unique(class(df5$fecha_sem))
+
+# Convertir fecha_sem a tipo Date
+df5 <- df5 %>%
+  mutate(fecha_sem = as.Date(fecha_sem, frac = 0))
+
+# Detectar duplicados o inconsistencias
+df5 %>%
+  count(fecha_sem) %>%
+  filter(n > 1)
+
+# Eliminar valores NA en fecha_sem
+df5 <- df5 %>%
+  filter(!is.na(fecha_sem))
+
+# Convertir a yearweek
+df5 <- df5 %>%
+  mutate(fecha_sem = yearweek(fecha_sem))
+
+# Crear el tsibble
+df5_tsibble <- df5 %>%
+  as_tsibble(index = fecha_sem)
+# Verificar estructura
+glimpse(df5_tsibble)
+
+# Completar fechas faltantes con NA
+df5_tsibble <- df5_tsibble %>%
+  fill_gaps(n = NA)
+
+df5_tsibble <- df5_tsibble %>%
+  ungroup()
+
+# Verificar la regularidad del índice
+interval(df5_tsibble)
+
+
+# Descomponer la serie temporal
+df5_tsibble %>%
+  model(STL(n ~ season(window = "periodic"))) %>%
+  components() %>%
+  autoplot()
+
+# Análisis de autocorrelación
+df5_tsibble %>%
+  ACF(n) %>%
+  autoplot()
+
+
+# Prueba de Shapiro-Wilk
+shapiro.test(residuals(model_sarima)$.resid)
+
+
+lambda <- BoxCox.lambda(df5$n)  # Encuentra el lambda óptimo
+df5$valor <- BoxCox(df5$n, lambda)
+
+model_sarima_adj <- df5_tsibble %>%
+  model(ARIMA(n ~ pdq(1,1,1) + PDQ(1,1,1,12)))
+
+
+# Vamos a trasnformar los datos porque distribución anormal y autocorrelación fuerte
+
+
+# Transformar los datos con Box-Cox
+lambda <- BoxCox.lambda(df5$n)
+df5$n <- BoxCox(df5$n, lambda)
+
+# Crear un tsibble con los datos transformados
+df5_tsibble <- df5 %>%
+  as_tsibble(index = fecha_sem)
+
+
+# Ajustar SARIMA automáticamente después de Box-Cox
+model_sarima_auto <- df5_tsibble %>%
+  model(SARIMA = ARIMA(n))
+
+# Ajustar SARIMA con constante explícita
+model_sarima_adj <- df5_tsibble %>%
+  model(SARIMA = ARIMA(valor ~ pdq(1,1,1) + PDQ(1,1,1,12) + 1))
+
+report(model_sarima_auto)
+
+# Vemos patrón de los residuos (distribución ahora es normal y autocorrelación baja)
+gg_tsresiduals(model_sarima_auto)
+shapiro.test(residuals(model_sarima_auto)$.resid)
+
+gg_tsresiduals(model_sarima_auto)
+
+
+df5_tsibble <- df5_tsibble %>%
+  ungroup()
+glimpse(df5_tsibble)
+interval(df5_tsibble)
+
+
+# Verifica lagunas en el índice
+scan_gaps(df5_tsibble)
+
+# Verificar regularidad del tsibble
+is_regular(df5_tsibble)
+
+# Revisar valores únicos del índice
+unique(df5_tsibble$fecha_sem)
+
+# Verificar regularidad del tsibble
+is_regular(df5_tsibble)  # Esto debería devolver TRUE
