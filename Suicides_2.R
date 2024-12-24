@@ -403,19 +403,18 @@ combined_data <- bind_rows(
     as_tibble() %>%
     select(fecha_sem, n) %>%
     mutate(tipo = "Histórico"),
-  
   # Datos observados
   evaluacion %>%
     as_tibble() %>%
     select(fecha_sem, n) %>%
     mutate(tipo = "Observado"),
-  
   # Pronósticos
   forecasted %>%
     select(fecha_sem, .mean, .lower, .upper) %>%
     rename(n = .mean) %>%
     mutate(tipo = "Pronosticado")
 )
+
 
 # --- Graficar serie completa ---
 ggplot() +
@@ -460,34 +459,119 @@ ggplot() +
   scale_color_manual(values = c("Histórico" = "black", "Observado" = "red", "Pronosticado" = "blue")) +
   theme_minimal()
 
+
+
 # --- Identificar observaciones fuera del intervalo de confianza ---
-fuera_intervalo <- combined_data %>%
+
+# Crear las columnas .lower y .upper en los datos históricos y observados
+combined_data <- bind_rows(
+  # Datos históricos
+  entrenamiento %>%
+    as_tibble() %>%
+    select(fecha_sem, n) %>%
+    mutate(
+      tipo = "Histórico",
+      .lower = NA,  # Rellenar con NA
+      .upper = NA   # Rellenar con NA
+    ),
+  
+  # Datos observados
+  evaluacion %>%
+    as_tibble() %>%
+    select(fecha_sem, n) %>%
+    mutate(
+      tipo = "Observado",
+      .lower = NA,  # Rellenar con NA
+      .upper = NA   # Rellenar con NA
+    ),
+  
+  # Pronósticos
+  forecasted %>%
+    as_tibble() %>%
+    select(fecha_sem, .mean, .lower, .upper) %>%
+    rename(n = .mean) %>%
+    mutate(tipo = "Pronosticado")
+)
+
+
+combined_data <- combined_data %>%
+  mutate(fecha_sem = as.Date(fecha_sem, origin = "1970-01-01"))
+
+# Ver cómo quedó
+glimpse(combined_data)
+
+combined_data %>%
+  filter(tipo == "Pronosticado") %>%
+  glimpse()
+
+combined_data %>%
+  filter(tipo == "Observado") %>%
+  glimpse()
+
+
+# Combinar observados con pronosticados
+result <- combined_data %>%
   filter(tipo == "Observado") %>%
   left_join(
     combined_data %>%
       filter(tipo == "Pronosticado") %>%
       select(fecha_sem, .lower, .upper),
     by = "fecha_sem"
-  ) %>%
-  filter(n < .lower | n > .upper)
+  )
+
+# Verificar el resultado
+glimpse(result)
+
+
+fuera_intervalo <- result %>%
+  filter(!is.na(.lower.y) & !is.na(.upper.y) & (n < .lower.y | n > .upper.y))
+
+glimpse(fuera_intervalo)
+print(head(fuera_intervalo))
+
+
+library(ggplot2)
+
+ggplot(combined_data, aes(x = fecha_sem, y = n, color = tipo)) +
+  geom_line() +
+  # Puntos rojos sólo para Observado fuera del intervalo
+  geom_point(data = fuera_intervalo %>% filter(tipo == "Observado"), 
+             aes(x = fecha_sem, y = n), color = "red", size = 2) +
+  # Banda de confianza para Pronosticado
+  geom_ribbon(data = combined_data %>% filter(tipo == "Pronosticado"),
+              aes(ymin = .lower, ymax = .upper), fill = "blue", alpha = 0.2) +
+  # Configuración de etiquetas y colores
+  scale_color_manual(
+    values = c("Histórico" = "black", "Pronosticado" = "blue", "Observado" = "red")
+  ) +
+  labs(
+    title = "Observaciones Fuera del Intervalo de Confianza",
+    x = "Fecha",
+    y = "Valor de la Serie Temporal",
+    color = "Tipo de Datos"
+  ) +
+  theme_minimal()
+
+
+
 
 # --- Crear tabla con observaciones fuera del intervalo ---
+
+library(gt)
+
+
 fuera_intervalo %>%
-  select(-tipo) %>%
+  select(fecha_sem, n, .lower.y, .upper.y) %>%
   gt() %>%
   tab_header(
     title = "Observaciones Fuera del Intervalo de Confianza",
-    subtitle = "Comparación de Observaciones con Pronósticos"
+    subtitle = "Comparación de Valores Observados con Pronósticos"
   ) %>%
   cols_label(
     fecha_sem = "Fecha",
     n = "Valor Observado",
-    .lower = "Límite Inferior",
-    .upper = "Límite Superior"
+    .lower.y = "Límite Inferior",
+    .upper.y = "Límite Superior"
   ) %>%
-  fmt_number(columns = c(n, .lower, .upper), decimals = 3) %>%
-  tab_style(
-    style = cell_text(weight = "bold", color = "red"),
-    locations = cells_body(columns = n, rows = n < 0)  # Resaltar valores negativos
-  )
+  fmt_number(columns = c(n, .lower.y, .upper.y), decimals = 3)
 
