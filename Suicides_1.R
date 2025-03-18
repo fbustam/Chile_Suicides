@@ -563,3 +563,4 @@ fuera_intervalo %>%
     locations = cells_body(columns = n, rows = n < 0)  # Resaltar valores negativos
   )
 
+
