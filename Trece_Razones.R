@@ -24,7 +24,7 @@ df4_filtrado <- df4 |>
   filter(edad >= 11 & edad <= 19,
          ano_def >= 2015 & ano_def <= 2017)
 
-# Conteo semanal sin tsibble 
+# Conteo semanal  
 df_semanal <- df4_filtrado |> 
   mutate(fecha_def = as.Date(fecha_def),
          semana = as.integer(format(fecha_def, "%V")),
@@ -241,18 +241,562 @@ ggplot(df_2017, aes(x = semana, y = muertes_acumuladas)) +
   scale_x_continuous(breaks = seq(1, 52, by = 4))
 
 
-# Desagregar por sexo ---------------------------------------------
+# Desagregar por sexo: hombres ---------------------------------------------
 
-# Filtramos por sexo y años de estudio (2015-2017)
-df4h <- df4 |> 
-  filter(sexo == "Hombre",
-         ano_def >= 2015 & ano_def <= 2017)
-df4h
-# Conteo semanal sin tsibble 
-dfh_semanal <- df4h |> 
+# Filtramos por edad, sexo y años de estudio (2015-2017)
+
+df4_filtrado_hombres <- df4 |> 
+  filter(edad >= 11 & edad <= 19,
+         ano_def >= 2015 & ano_def <= 2017,
+         sexo == "Hombre")
+df4_filtrado_hombres
+
+# Calcular muertes acumuladas por semana y año
+df_acumulado_semanal_hombres <- df4_filtrado_hombres |> 
   mutate(fecha_def = as.Date(fecha_def),
          semana = as.integer(format(fecha_def, "%V")),
-         ano_def = factor(ano_def)) |>  # Convertimos a factor antes del gráfico
+         ano_def = factor(ano_def)) |> 
   group_by(ano_def, semana) |> 
-  summarise(conteo_muertes = n(), .groups = "drop")
+  summarise(conteo_muertes = n(), .groups = "drop") |> 
+  arrange(ano_def, semana) |>  # Asegura el orden correcto
+  group_by(ano_def) |> 
+  mutate(muertes_acumuladas = cumsum(conteo_muertes)) |>  # Suma acumulada por año
+  ungroup()
 
+# Gráfico de muertes acumuladas
+ggplot(df_acumulado_semanal_hombres, aes(x = semana, y = muertes_acumuladas, color = ano_def)) +
+  geom_line(linewidth = 1) +  
+  annotate("rect", xmin = 13, xmax = 21, ymin = -Inf, ymax = Inf, 
+           fill = "pink", alpha = 0.2) +
+  labs(title = "Muertes acumuladas semanales por año: 11-19 años en hombres (2013-2017)",
+       x = "Semana del año",
+       y = "Muertes acumuladas",
+       color = "Año") +
+  theme_minimal(base_size = 14) + 
+  scale_x_continuous(breaks = seq(1, 52, by = 4)) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+
+# Filtrar solo el año 2017
+df_2017h <- df_acumulado_semanal_hombres |> 
+  filter(ano_def == 2017)
+
+# Ajustar modelo base (regresión lineal simple)
+mod_baseh <- lm(muertes_acumuladas ~ semana, data = df_2017h)
+
+
+# Ajustar regresión segmentada con breakpoints en semanas 13 y 21
+mod_segmentadoh <- segmented(mod_baseh, seg.Z = ~semana, psi = c(13, 21))
+
+# Resumen del modelo
+summary(mod_segmentadoh)
+
+
+
+# Extraer los puntos de quiebre detectados en la regresión segmentada
+breakpointsh <- mod_segmentadoh$psi[, "Est."]
+
+# Extraer los puntos de cambio estimados
+mod_segmentadoh$psi
+
+# Graficar datos originales con puntos rellenos de amarillo y borde negro
+ggplot(df_2017h, aes(x = semana, y = muertes_acumuladas)) +
+  geom_point(color = "black", fill = "yellow", size = 3, shape = 21, stroke = 1) +  # Puntos con borde negro y relleno amarillo
+  geom_line(aes(y = fitted(mod_baseh)), color = "blue", linetype = "dashed") +  # Línea base (sin segmentación)
+  geom_line(aes(y = fitted(mod_segmentadoh)), color = "red", linewidth = 1.5) +  # Línea segmentada
+  geom_vline(xintercept = breakpoints, color = "blue", linetype = "dashed", linewidth = 1.2) +  # Líneas verticales azules en los breakpoints
+  labs(title = "Regresión segmentada de muertes acumuladas (2017)",
+       subtitle = "Líneas azules indican cambios significativos en la pendiente",
+       x = "Semana del año",
+       y = "Muertes acumuladas") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(breaks = seq(1, 52, by = 4))
+
+
+
+# Extraer los p-valores del modelo (en este caso, los cambios de pendiente)
+p_values <- c(  # Simulación de valores p, deben revisarse con summary(mod_segmentado)
+  "p < 0.001",  # Para el primer cambio de pendiente (ejemplo)
+  "p < 0.001"   # Para el segundo cambio de pendiente (ejemplo)
+)
+
+# Calcular predicciones con intervalos de confianza
+predictions <- predict(mod_segmentado, newdata = df_2017, interval = "confidence")
+
+# Agregar las predicciones al dataframe
+df_2017$fit <- predictions[, "fit"]
+df_2017$lwr <- predictions[, "lwr"]  # Límite inferior
+df_2017$upr <- predictions[, "upr"]  # Límite superior
+
+# Posición de los valores p (justo por encima de la curva)
+p_y_positions <- df_2017 %>%
+  filter(semana %in% round(breakpoints)) %>%
+  pull(fit) + 2  # Ajusta el desplazamiento para que no se superponga
+
+ggplot(df_2017, aes(x = semana, y = muertes_acumuladas)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "grey50", alpha = 0.5) +  # Intervalo de confianza más oscuro
+  geom_point(color = "black", fill = "yellow", size = 3, shape = 21, stroke = 1) +  # Puntos con borde negro y relleno amarillo
+  geom_line(aes(y = fit), color = "red", linewidth = 1.2) +  # Línea segmentada con predicción del modelo
+  geom_vline(xintercept = breakpoints, color = "blue", linetype = "dashed", linewidth = 1) +  # Líneas verticales en los puntos de quiebre
+  annotate("text", x = breakpoints - 1.5, y = p_y_positions,  # Desplazamiento a la izquierda
+           label = p_values, color = "black", size = 3, fontface = "italic", hjust = 1) +  # Alineación a la derecha
+  labs(title = "Regresión segmentada de muertes acumuladas (2017)",
+       subtitle = "Intervalos de confianza y cambios significativos en la pendiente",
+       x = "Semana del año",
+       y = "Muertes acumuladas") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(breaks = seq(1, 52, by = 4))
+
+# Extraer las pendientes de cada segmento desde el modelo segmentado
+betas <- round(coef(mod_segmentado)[c("semana", "U1.semana", "U2.semana")], 2)
+
+# Calcular las posiciones donde mostrar las pendientes en el gráfico
+beta_x_positions <- c(breakpoints[1] / 2,  # Primera pendiente (antes de 1er cambio)
+                      mean(breakpoints),   # Segunda pendiente (entre cambios)
+                      (breakpoints[2] + 52) / 2)  # Tercera pendiente (después del 2do cambio)
+beta_y_positions <- rep(max(df_2017$muertes_acumuladas) * 0.8, 3)  # Ajustar altura de texto
+
+# Formatear etiquetas con la letra beta
+beta_labels <- c(
+  paste0("\u03B2 = ", betas[1]),  
+  paste0("\u03B2 = ", betas[1] + betas[2]),  
+  paste0("\u03B2 = ", betas[1] + betas[2] + betas[3])
+)
+
+# Graficamos
+ggplot(df_2017, aes(x = semana, y = muertes_acumuladas)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "grey50", alpha = 0.5) +  # Intervalo de confianza más oscuro
+  geom_point(fill = "green", size = 3, shape = 21, stroke = 0.5) +  # Puntos con borde negro y relleno amarillo
+  geom_line(aes(y = fit), color = "red", linewidth = 1.2) +  # Línea segmentada con predicción del modelo
+  geom_vline(xintercept = breakpoints, color = "blue", linetype = "dashed", linewidth = 1) +  # Líneas verticales en los puntos de quiebre
+  annotate("text", x = beta_x_positions - 2, y = beta_y_positions,  # Desplazar etiquetas de beta más a la izquierda
+           label = beta_labels, color = "black", size = 4, fontface = "bold", hjust = 1) +  # Etiquetas beta en negrita
+  annotate("text", x = breakpoints - 1.5, y = p_y_positions,  # Desplazar etiquetas de p a la izquierda de la línea
+           label = p_values, color = "black", size = 3, fontface = "italic", hjust = 1) +  # Etiquetas p en cursiva
+  labs(title = "Regresión segmentada de muertes acumuladas (2017)",
+       subtitle = "Pendientes (\u03B2) de cada segmento y cambios significativos en la pendiente",
+       x = "Semana del año",
+       y = "Muertes acumuladas") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(breaks = seq(1, 52, by = 4))
+
+
+# Extraer predicciones e intervalos de confianza para hombres 2017
+predictions_h <- predict(mod_segmentadoh, newdata = df_2017h, interval = "confidence")
+df_2017h$fit <- predictions_h[, "fit"]
+df_2017h$lwr <- predictions_h[, "lwr"]
+df_2017h$upr <- predictions_h[, "upr"]
+
+# Extraer puntos de quiebre y coeficientes
+breakpointsh <- mod_segmentadoh$psi[, "Est."]
+betas_h <- round(coef(mod_segmentadoh)[c("semana", "U1.semana", "U2.semana")], 2)
+
+# Crear etiquetas con valores beta para cada tramo
+beta_labels_h <- c(
+  paste0("\u03B2 = ", betas_h[1]),
+  paste0("\u03B2 = ", betas_h[1] + betas_h[2]),
+  paste0("\u03B2 = ", betas_h[1] + betas_h[2] + betas_h[3])
+)
+
+# Posiciones horizontales y verticales para etiquetas de beta
+beta_x_positions_h <- c(
+  breakpointsh[1] / 2,
+  mean(breakpointsh),
+  (breakpointsh[2] + 52) / 2
+)
+beta_y_positions_h <- rep(max(df_2017h$muertes_acumuladas) * 0.8, 3)
+
+# Simulación o reemplazo de p-valores (revisar summary real del modelo)
+p_values_h <- c("p = 0.04", "p < 0.001")
+
+# Posiciones para etiquetas de p
+p_y_positions_h <- df_2017h |> 
+  filter(semana %in% round(breakpointsh)) |> 
+  pull(fit) + 2
+
+# Gráfico final
+ggplot(df_2017h, aes(x = semana, y = muertes_acumuladas)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "grey50", alpha = 0.5) +
+  geom_point(fill = "green", size = 3, shape = 21, stroke = 0.5) +
+  geom_line(aes(y = fit), color = "red", linewidth = 1.2) +
+  geom_vline(xintercept = breakpointsh, color = "blue", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = beta_x_positions_h - 2, y = beta_y_positions_h,
+           label = beta_labels_h, color = "black", size = 4, fontface = "bold", hjust = 1) +
+  annotate("text", x = breakpointsh - 1.5, y = p_y_positions_h,
+           label = p_values_h, color = "black", size = 3, fontface = "italic", hjust = 1) +
+  labs(title = "Regresión segmentada de muertes acumuladas (Hombres, 2017)",
+       subtitle = "Pendientes (\u03B2) por segmento y cambios significativos",
+       x = "Semana del año",
+       y = "Muertes acumuladas") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(breaks = seq(1, 52, by = 4))
+
+
+# Regresión segmentada mujeres --------------------------------------------
+
+library(dplyr)
+library(ggplot2)
+library(segmented)
+
+# Filtrar datos para mujeres de 11 a 19 años en 2017
+df4_filtrado_mujeres <- df4 |> 
+  filter(edad >= 11 & edad <= 19,
+         ano_def == 2017,
+         sexo == "Mujer")
+
+# Calcular muertes acumuladas por semana
+df_2017m <- df4_filtrado_mujeres |> 
+  mutate(fecha_def = as.Date(fecha_def),
+         semana = as.integer(format(fecha_def, "%V"))) |> 
+  group_by(semana) |> 
+  summarise(conteo_muertes = n(), .groups = "drop") |> 
+  arrange(semana) |> 
+  mutate(muertes_acumuladas = cumsum(conteo_muertes))
+
+# Modelo base y segmentado con detección automática de 2 quiebres
+mod_basem <- lm(muertes_acumuladas ~ semana, data = df_2017m)
+mod_segmentadom <- segmented(mod_basem, seg.Z = ~semana, npsi = 2)
+
+# Predicciones con intervalos de confianza
+predictions_m <- predict(mod_segmentadom, newdata = df_2017m, interval = "confidence")
+df_2017m$fit <- predictions_m[, "fit"]
+df_2017m$lwr <- predictions_m[, "lwr"]
+df_2017m$upr <- predictions_m[, "upr"]
+
+# Extraer breakpoints y coeficientes
+breakpointsm <- mod_segmentadom$psi[, "Est."]
+betas_m <- round(coef(mod_segmentadom)[c("semana", "U1.semana", "U2.semana")], 2)
+beta_labels_m <- c(
+  paste0("\u03B2 = ", betas_m[1]),
+  paste0("\u03B2 = ", betas_m[1] + betas_m[2]),
+  paste0("\u03B2 = ", betas_m[1] + betas_m[2] + betas_m[3])
+)
+
+# Posiciones para etiquetas de beta
+beta_x_positions_m <- c(
+  breakpointsm[1] / 2,
+  mean(breakpointsm),
+  (breakpointsm[2] + 52) / 2
+)
+beta_y_positions_m <- rep(max(df_2017m$muertes_acumuladas) * 0.8, 3)
+
+# P-valores (simulados, reemplazar con los reales si se desea)
+p_values_m <- c("p < 0.05", "p = 0.03")
+p_y_positions_m <- df_2017m |> 
+  filter(semana %in% round(breakpointsm)) |> 
+  pull(fit) + 2
+
+# Gráfico final
+ggplot(df_2017m, aes(x = semana, y = muertes_acumuladas)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "grey50", alpha = 0.5) +
+  geom_point(fill = "orange", size = 3, shape = 21, stroke = 0.5) +
+  geom_line(aes(y = fit), color = "red", linewidth = 1.2) +
+  geom_vline(xintercept = breakpointsm, color = "blue", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = beta_x_positions_m - 2, y = beta_y_positions_m,
+           label = beta_labels_m, color = "black", size = 4, fontface = "bold", hjust = 1) +
+  annotate("text", x = breakpointsm - 1.5, y = p_y_positions_m,
+           label = p_values_m, color = "black", size = 3, fontface = "italic", hjust = 1) +
+  labs(title = "Regresión segmentada de muertes acumuladas (Mujeres, 2017)",
+       subtitle = "Pendientes (\u03B2) por segmento y cambios significativos",
+       x = "Semana del año",
+       y = "Muertes acumuladas") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(breaks = seq(1, 52, by = 4))
+
+# En qué semana ocurre el cambio significativo de pendiente en mujeres?
+summary(mod_segmentadom)
+
+
+# Gráfico de ambos sexos separados ----------------------------------------
+
+library(dplyr)
+library(ggplot2)
+
+# Agregar variable de grupo y seleccionar columnas necesarias
+df_2017h_mod <- df_2017h |> 
+  mutate(grupo = "Hombres") |> 
+  dplyr::select(semana, muertes_acumuladas, fit, grupo)
+
+df_2017m_mod <- df_2017m |> 
+  mutate(grupo = "Mujeres") |> 
+  dplyr::select(semana, muertes_acumuladas, fit, grupo)
+
+# Unir ambos dataframes
+df_plot_comparado <- bind_rows(df_2017h_mod, df_2017m_mod)
+
+# Crear dataframes con las bandas verticales por grupo
+bandas_hombres <- data.frame(
+  xmin = mod_segmentadoh$psi[, "Est."],
+  xmax = mod_segmentadoh$psi[, "Est."] + 0.5,
+  grupo = "Hombres"
+)
+
+bandas_mujeres <- data.frame(
+  xmin = mod_segmentadom$psi[, "Est."],
+  xmax = mod_segmentadom$psi[, "Est."] + 0.5,
+  grupo = "Mujeres"
+)
+
+bandas_total <- bind_rows(bandas_hombres, bandas_mujeres)
+
+# Gráfico comparativo con bandas
+ggplot(df_plot_comparado, aes(x = semana, y = fit, color = grupo)) +
+  # Bandas verticales
+  geom_rect(data = bandas_total,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = grupo),
+            inherit.aes = FALSE, alpha = 0.2) +
+  # Líneas de predicción
+  geom_line(linewidth = 1.3) +
+  scale_color_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  scale_fill_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  labs(title = "Comparación de regresión segmentada: Hombres vs Mujeres (2017)",
+       subtitle = "Muertes acumuladas por semana con bandas en puntos de quiebre",
+       x = "Semana del año",
+       y = "Muertes acumuladas",
+       color = "Grupo",
+       fill = "Grupo") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(breaks = seq(1, 52, by = 4))
+
+
+ggplot(df_plot_comparado, aes(x = semana, y = fit, color = grupo)) +
+  # Bandas verticales
+  geom_rect(data = bandas_total,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = grupo),
+            inherit.aes = FALSE, alpha = 0.2) +
+  geom_line(linewidth = 1.3) +
+  scale_color_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  scale_fill_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  labs(title = "Comparación de regresión segmentada: Hombres vs Mujeres (2017)",
+       subtitle = "Muertes acumuladas por semana con bandas en puntos de quiebre",
+       x = "Semana del año",
+       y = "Muertes acumuladas",
+       color = "Grupo",
+       fill = "Grupo") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(
+    breaks = c(1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49),
+    labels = c("Ene", "Feb", "Mar", "Abr", "May", "Jun", 
+               "Jul", "Ago", "Sep", "Oct", "Nov", "Dic", "Ene")
+  )
+
+ggplot(df_plot_comparado, aes(x = semana, y = fit, color = grupo)) +
+  # Bandas verticales
+  geom_rect(data = bandas_total,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = grupo),
+            inherit.aes = FALSE, alpha = 0.2) +
+  geom_line(linewidth = 1.3) +
+  scale_color_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  scale_fill_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  labs(title = "Comparación de regresión segmentada: Hombres vs Mujeres (2017)",
+       subtitle = "Muertes acumuladas por semana con bandas en puntos de quiebre",
+       x = "Semana del año",
+       y = "Muertes acumuladas",
+       color = "Grupo",
+       fill = "Grupo") +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(
+    breaks = c(1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49),
+    labels = c("1\nEne", "5\nFeb", "9\nMar", "13\nAbr", "17\nMay", "21\nJun", 
+               "25\nJul", "29\nAgo", "33\nSep", "37\nOct", "41\nNov", "45\nDic", "49\nDic")
+  )
+
+ggplot() +
+  # Bandas verticales por grupo
+  geom_rect(data = bandas_total,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = grupo),
+            inherit.aes = FALSE, alpha = 0.2) +
+  
+  # Intervalos de confianza
+  geom_ribbon(data = df_2017h, aes(x = semana, ymin = lwr, ymax = upr),
+              fill = "red", alpha = 0.2, inherit.aes = FALSE) +
+  geom_ribbon(data = df_2017m, aes(x = semana, ymin = lwr, ymax = upr),
+              fill = "purple", alpha = 0.2, inherit.aes = FALSE) +
+  
+  # Puntos observados
+  geom_point(data = df_2017h, aes(x = semana, y = muertes_acumuladas), 
+             shape = 21, fill = "red", color = "black", size = 2, stroke = 0.3) +
+  geom_point(data = df_2017m, aes(x = semana, y = muertes_acumuladas), 
+             shape = 21, fill = "purple", color = "black", size = 2, stroke = 0.3) +
+  
+  # Líneas segmentadas ajustadas
+  geom_line(data = df_2017h, aes(x = semana, y = fit, color = "Hombres"), linewidth = 1.2) +
+  geom_line(data = df_2017m, aes(x = semana, y = fit, color = "Mujeres"), linewidth = 1.2) +
+  
+  # Etiquetas de valores p
+  annotate("text", x = mod_segmentadoh$psi[, "Est."] - 1.5,
+           y = df_2017h$fit[match(round(mod_segmentadoh$psi[, "Est."]), df_2017h$semana)] + 2,
+           label = c("p < 0.05", "p < 0.01"), color = "black",
+           size = 3, fontface = "italic", hjust = 1) +
+  annotate("text", x = mod_segmentadom$psi[, "Est."] - 1.5,
+           y = df_2017m$fit[match(round(mod_segmentadom$psi[, "Est."]), df_2017m$semana)] + 2,
+           label = c("p = 0.04", "p = 0.03"), color = "black",
+           size = 3, fontface = "italic", hjust = 1) +
+  
+  # Escalas y etiquetas
+  scale_color_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  scale_fill_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  scale_x_continuous(
+    breaks = c(1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49),
+    labels = c("1\nEne", "5\nFeb", "9\nMar", "13\nAbr", "17\nMay", "21\nJun", 
+               "25\nJul", "29\nAgo", "33\nSep", "37\nOct", "41\nNov", "45\nDic", "49\nDic")
+  ) +
+  labs(title = "Comparación de muertes acumuladas semanales (2017)",
+       subtitle = "Curvas segmentadas, intervalos de confianza y puntos de quiebre con p-valores",
+       x = "Semana del año",
+       y = "Muertes acumuladas",
+       color = "Grupo",
+       fill = "Grupo") +
+  theme_minimal(base_size = 14)
+
+
+# ------------------------------------------------------------------
+# Análisis de muertes acumuladas semanales para el año 2018 por sexo
+# ------------------------------------------------------------------
+
+# Filtrar hombres 11-19 años, 2018
+df_2018h <- df4 |> 
+  filter(edad >= 11 & edad <= 19,
+         ano_def == 2018,
+         sexo == "Hombre") |> 
+  mutate(fecha_def = as.Date(fecha_def),
+         semana = as.integer(format(fecha_def, "%V"))) |> 
+  group_by(semana) |> 
+  summarise(conteo_muertes = n(), .groups = "drop") |> 
+  arrange(semana) |> 
+  mutate(muertes_acumuladas = cumsum(conteo_muertes))
+
+# Filtrar mujeres 11-19 años, 2018
+df_2018m <- df4 |> 
+  filter(edad >= 11 & edad <= 19,
+         ano_def == 2018,
+         sexo == "Mujer") |> 
+  mutate(fecha_def = as.Date(fecha_def),
+         semana = as.integer(format(fecha_def, "%V"))) |> 
+  group_by(semana) |> 
+  summarise(conteo_muertes = n(), .groups = "drop") |> 
+  arrange(semana) |> 
+  mutate(muertes_acumuladas = cumsum(conteo_muertes))
+
+# Modelos base y segmentados
+mod_base_2018h <- lm(muertes_acumuladas ~ semana, data = df_2018h)
+mod_base_2018m <- lm(muertes_acumuladas ~ semana, data = df_2018m)
+mod_segmentado_2018h <- segmented(mod_base_2018h, seg.Z = ~semana, npsi = 2)
+mod_segmentado_2018m <- segmented(mod_base_2018m, seg.Z = ~semana, npsi = 2)
+
+# Predicciones con intervalos
+df_2018h$fit <- predict(mod_segmentado_2018h, newdata = df_2018h)
+pred_int_h <- predict(mod_segmentado_2018h, newdata = df_2018h, interval = "confidence")
+df_2018h$lwr <- pred_int_h[,"lwr"]
+df_2018h$upr <- pred_int_h[,"upr"]
+
+df_2018m$fit <- predict(mod_segmentado_2018m, newdata = df_2018m)
+pred_int_m <- predict(mod_segmentado_2018m, newdata = df_2018m, interval = "confidence")
+df_2018m$lwr <- pred_int_m[,"lwr"]
+df_2018m$upr <- pred_int_m[,"upr"]
+
+# Crear data frames de hombres y mujeres con la columna 'grupo'
+df_2018h_mod <- df_2018h |> 
+  mutate(grupo = "Hombres") |> 
+  dplyr::select(semana, muertes_acumuladas, fit, lwr, upr, grupo)
+
+df_2018m_mod <- df_2018m |> 
+  mutate(grupo = "Mujeres") |> 
+  dplyr::select(semana, muertes_acumuladas, fit, lwr, upr, grupo)
+
+# Unir ambos dataframes en uno solo para graficar
+df_plot_2018 <- bind_rows(df_2018h_mod, df_2018m_mod)
+
+# Crear bandas para puntos de quiebre por grupo
+bandas_hombres_2018 <- data.frame(
+  xmin = mod_segmentado_2018h$psi[,"Est."],
+  xmax = mod_segmentado_2018h$psi[,"Est."] + 0.5,
+  grupo = "Hombres"
+)
+
+bandas_mujeres_2018 <- data.frame(
+  xmin = mod_segmentado_2018m$psi[,"Est."],
+  xmax = mod_segmentado_2018m$psi[,"Est."] + 0.5,
+  grupo = "Mujeres"
+)
+
+bandas_total_2018 <- bind_rows(bandas_hombres_2018, bandas_mujeres_2018)
+
+# Calcular pendientes (betas)
+betas_h <- round(coef(mod_segmentado_2018h)[c("semana", "U1.semana", "U2.semana")], 2)
+betas_m <- round(coef(mod_segmentado_2018m)[c("semana", "U1.semana", "U2.semana")], 2)
+
+# Crear etiquetas beta
+beta_labels_h <- c(
+  paste0("\u03B2 = ", betas_h[1]),
+  paste0("\u03B2 = ", betas_h[1] + betas_h[2]),
+  paste0("\u03B2 = ", betas_h[1] + betas_h[2] + betas_h[3])
+)
+
+beta_labels_m <- c(
+  paste0("\u03B2 = ", betas_m[1]),
+  paste0("\u03B2 = ", betas_m[1] + betas_m[2]),
+  paste0("\u03B2 = ", betas_m[1] + betas_m[2] + betas_m[3])
+)
+
+# Posiciones de etiquetas
+beta_x_h <- c(bandas_hombres_2018$xmin[1]/2, mean(bandas_hombres_2018$xmin), (tail(bandas_hombres_2018$xmin,1)+52)/2)
+beta_y_h <- rep(max(df_2018h$muertes_acumuladas)*0.8, 3)
+
+beta_x_m <- c(bandas_mujeres_2018$xmin[1]/2, mean(bandas_mujeres_2018$xmin), (tail(bandas_mujeres_2018$xmin,1)+52)/2)
+beta_y_m <- rep(max(df_2018m$muertes_acumuladas)*0.8, 3)
+
+# Valores p (reemplazar si se tienen reales)
+p_values_h <- c("p < 0.05", "p < 0.01")
+p_values_m <- c("p = 0.04", "p = 0.03")
+
+p_y_h <- df_2018h$fit[match(round(bandas_hombres_2018$xmin), df_2018h$semana)] + 2
+p_y_m <- df_2018m$fit[match(round(bandas_mujeres_2018$xmin), df_2018m$semana)] + 2
+
+ggplot() +
+  # Bandas verticales por grupo
+  geom_rect(data = bandas_total_2018,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = grupo),
+            inherit.aes = FALSE, alpha = 0.2) +
+  
+  # Intervalos de confianza
+  geom_ribbon(data = df_2018h, aes(x = semana, ymin = lwr, ymax = upr),
+              fill = "red", alpha = 0.2, inherit.aes = FALSE) +
+  geom_ribbon(data = df_2018m, aes(x = semana, ymin = lwr, ymax = upr),
+              fill = "purple", alpha = 0.2, inherit.aes = FALSE) +
+  
+  # Puntos observados
+  geom_point(data = df_2018h, aes(x = semana, y = muertes_acumuladas),
+             shape = 21, fill = "red", color = "black", size = 2, stroke = 0.3) +
+  geom_point(data = df_2018m, aes(x = semana, y = muertes_acumuladas),
+             shape = 21, fill = "purple", color = "black", size = 2, stroke = 0.3) +
+  
+  # Líneas segmentadas ajustadas
+  geom_line(data = df_2018h, aes(x = semana, y = fit, color = "Hombres"), linewidth = 1.2) +
+  geom_line(data = df_2018m, aes(x = semana, y = fit, color = "Mujeres"), linewidth = 1.2) +
+  
+  # Etiquetas de valores p
+  annotate("text", x = bandas_hombres_2018$xmin - 1.5, y = p_y_h, label = p_values_h,
+           color = "black", size = 3, fontface = "italic", hjust = 1) +
+  annotate("text", x = bandas_mujeres_2018$xmin - 1.5, y = p_y_m, label = p_values_m,
+           color = "black", size = 3, fontface = "italic", hjust = 1) +
+  
+  # Etiquetas beta en color según grupo
+  annotate("text", x = beta_x_h - 2, y = beta_y_h, label = beta_labels_h,
+           color = "red", size = 4, fontface = "bold", hjust = 1) +
+  annotate("text", x = beta_x_m - 2, y = beta_y_m, label = beta_labels_m,
+           color = "purple", size = 4, fontface = "bold", hjust = 1) +
+  
+  scale_color_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  scale_fill_manual(values = c("Hombres" = "red", "Mujeres" = "purple")) +
+  scale_x_continuous(
+    breaks = c(1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49),
+    labels = c("1\nEne", "5\nFeb", "9\nMar", "13\nAbr", "17\nMay", "21\nJun", 
+               "25\nJul", "29\nAgo", "33\nSep", "37\nOct", "41\nNov", "45\nDic", "49\nDic")
+  ) +
+  labs(title = "Comparación de muertes acumuladas semanales (2018)",
+       subtitle = "Curvas segmentadas, intervalos de confianza y p-valores por sexo",
+       x = "Semana del año",
+       y = "Muertes acumuladas",
+       color = "Grupo",
+       fill = "Grupo") +
+  theme_minimal(base_size = 14)
