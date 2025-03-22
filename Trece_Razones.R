@@ -17,21 +17,14 @@ df3 <- read_excel("df3.xlsx")
 # Selección de variables clave
 df3 |> 
   select(ano_def, fecha_def, sexo, edad, ID) -> df4
+View(df4)
 
 # Filtramos edad (11-19 años) y años de estudio (2015-2017)
 df4_filtrado <- df4 |> 
   filter(edad >= 11 & edad <= 19,
          ano_def >= 2015 & ano_def <= 2017)
 
-# Transformamos a tsibble y contamos muertes semanales
-df4_tsbl <- df4_filtrado |> 
-  mutate(fecha_def = as.Date(fecha_def)) |> 
-  as_tsibble(index = fecha_def, key = ID)  |> 
-  index_by(semana = yearweek(fecha_def)) |> 
-  summarise(ano_def = first(ano_def),  
-            conteo_muertes = n())
-
-# Otra forma de conteo semanal sin tsibble 
+# Conteo semanal sin tsibble 
 df_semanal <- df4_filtrado |> 
   mutate(fecha_def = as.Date(fecha_def),
          semana = as.integer(format(fecha_def, "%V")),
@@ -158,6 +151,11 @@ mod_segmentado <- segmented(mod_base, seg.Z = ~semana, psi = c(13, 21))
 # Resumen del modelo
 summary(mod_segmentado)
 
+
+
+# Extraer los puntos de quiebre detectados en la regresión segmentada
+breakpoints <- mod_segmentado$psi[, "Est."]
+
 # Extraer los puntos de cambio estimados
 mod_segmentado$psi
 
@@ -175,9 +173,6 @@ ggplot(df_2017, aes(x = semana, y = muertes_acumuladas)) +
   scale_x_continuous(breaks = seq(1, 52, by = 4))
 
 
-
-# Extraer los puntos de quiebre detectados en la regresión segmentada
-breakpoints <- mod_segmentado$psi[, "Est."]
 
 # Extraer los p-valores del modelo (en este caso, los cambios de pendiente)
 p_values <- c(  # Simulación de valores p, deben revisarse con summary(mod_segmentado)
@@ -244,4 +239,20 @@ ggplot(df_2017, aes(x = semana, y = muertes_acumuladas)) +
        y = "Muertes acumuladas") +
   theme_minimal(base_size = 14) +
   scale_x_continuous(breaks = seq(1, 52, by = 4))
+
+
+# Desagregar por sexo ---------------------------------------------
+
+# Filtramos por sexo y años de estudio (2015-2017)
+df4h <- df4 |> 
+  filter(sexo == "Hombre",
+         ano_def >= 2015 & ano_def <= 2017)
+df4h
+# Conteo semanal sin tsibble 
+dfh_semanal <- df4h |> 
+  mutate(fecha_def = as.Date(fecha_def),
+         semana = as.integer(format(fecha_def, "%V")),
+         ano_def = factor(ano_def)) |>  # Convertimos a factor antes del gráfico
+  group_by(ano_def, semana) |> 
+  summarise(conteo_muertes = n(), .groups = "drop")
 
