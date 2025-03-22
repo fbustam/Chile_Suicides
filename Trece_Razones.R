@@ -800,3 +800,230 @@ ggplot() +
        color = "Grupo",
        fill = "Grupo") +
   theme_minimal(base_size = 14)
+
+
+
+# estudiar la estacionalidad de los suicidios 2014-2019 ----------------------------------
+
+# Cargar paquetes necesarios
+library(dplyr)
+library(forecast)
+library(ggplot2)
+
+# Filtrar datos de hombres entre 11 y 19 años entre 2014 y 2019
+df_hombres_2014_2019 <- df4 |> 
+  filter(sexo == "Hombre",
+         edad >= 11 & edad <= 19,
+         ano_def >= 2014 & ano_def <= 2019) |> 
+  mutate(fecha_def = as.Date(fecha_def),
+         semana = as.integer(format(fecha_def, "%V")),
+         año = as.integer(format(fecha_def, "%Y"))) |> 
+  group_by(año, semana) |> 
+  summarise(conteo_muertes = n(), .groups = "drop") |> 
+  arrange(año, semana)
+
+# Convertir a serie de tiempo semanal (frecuencia 52 semanas por año)
+ts_hombres <- ts(df_hombres_2014_2019$conteo_muertes, frequency = 52, start = c(2014, 1))
+
+# Descomposición clásica aditiva
+decomp <- decompose(ts_hombres)
+autoplot(decomp) +
+  labs(title = "Descomposición clásica de serie de tiempo (Hombres 11–19 años)",
+       subtitle = "Frecuencia semanal (2014–2019)")
+
+# Descomposición robusta con STL (más flexible)
+stl_hombres <- stl(ts_hombres, s.window = "periodic")
+autoplot(stl_hombres) +
+  labs(title = "Descomposición STL de la serie semanal (Hombres 11–19 años)",
+       subtitle = "Muestra tendencia, estacionalidad y ruido")
+
+
+# Hombres estacionalidad 2014-19 -------------------------
+
+library(lubridate)
+
+# Filtrar hombres 11–19 años (2014–2019)
+df_hombres <- df3 |> 
+  filter(sexo == "Hombre", 
+         edad >= 11 & edad <= 19,
+         ano_def >= 2014 & ano_def <= 2019)
+
+# Agrupar por semana
+df_hombres_semanal <- df_hombres |> 
+  mutate(fecha_def = as.Date(fecha_def),
+         fecha_semana = floor_date(fecha_def, unit = "week")) |> 
+  count(fecha_semana) |> 
+  arrange(fecha_semana)
+
+# Serie temporal
+ts_hombres <- ts(df_hombres_semanal$n, start = c(2014, 1), frequency = 52)
+stl_hombres <- stl(ts_hombres, s.window = "periodic")
+estacionalidad_hombres <- stl_hombres$time.series[, "seasonal"]
+
+# Crear tabla
+tabla_hombres <- tibble(
+  fecha = df_hombres_semanal$fecha_semana,
+  semana = isoweek(fecha),
+  mes = month(fecha, label = TRUE, abbr = TRUE),
+  estacionalidad = estacionalidad_hombres
+)
+
+# Calcular promedio por semana
+promedios_hombres <- tabla_hombres |> 
+  group_by(semana) |> 
+  summarise(promedio = mean(estacionalidad), .groups = "drop")
+
+# Top 3 semanas más altas
+top_semanas_h <- promedios_hombres |> 
+  slice_max(order_by = promedio, n = 3) |> 
+  pull(semana)
+
+# Gráfico con color distinto para top semanas HOMBRES
+tabla_hombres <- tabla_hombres |> 
+  mutate(destacada = ifelse(semana %in% top_semanas_h, "Sí", "No"))
+
+
+tabla_hombres <- tabla_hombres |> 
+  mutate(anio = year(fecha),
+         mes = month(fecha, label = TRUE, abbr = TRUE),
+         semana_mes = paste0(semana, "\n", mes))
+
+ggplot(tabla_hombres, aes(x = semana_mes, y = estacionalidad, fill = destacada)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_smooth(aes(group = 1), method = "loess", se = TRUE, color = "red", fill = "red", alpha = 0.2, linewidth = 1.2) +
+  scale_fill_manual(values = c("Sí" = "red", "No" = "skyblue")) +
+  scale_x_discrete(
+    breaks = levels(factor(tabla_hombres$semana_mes))[seq(1, length(unique(tabla_hombres$semana_mes)), by = 2)]
+  ) +
+  scale_y_continuous(
+    breaks = seq(floor(min(tabla_hombres$estacionalidad)), 
+                 ceiling(max(tabla_hombres$estacionalidad)), 
+                 by = 0.2)
+  ) +
+  labs(title = "Estacionalidad semanal en hombres (11–19 años, 2014–2019)",
+       subtitle = "Con tendencia suavizada (Loess) e intervalo de confianza",
+       x = "Semana\nMes",
+       y = "Variación estacional") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Mujeres estacionalidad 2014-19 -------------------------
+
+# Filtrar mujeres 11–19 años (2014–2019)
+df_mujeres <- df3 |> 
+  filter(sexo == "Mujer", 
+         edad >= 11 & edad <= 19,
+         ano_def >= 2014 & ano_def <= 2019)
+
+df_mujeres_semanal <- df_mujeres |> 
+  mutate(fecha_def = as.Date(fecha_def),
+         fecha_semana = floor_date(fecha_def, unit = "week")) |> 
+  count(fecha_semana) |> 
+  arrange(fecha_semana)
+
+# Serie temporal
+ts_mujeres <- ts(df_mujeres_semanal$n, start = c(2014, 1), frequency = 52)
+stl_mujeres <- stl(ts_mujeres, s.window = "periodic")
+estacionalidad_mujeres <- stl_mujeres$time.series[, "seasonal"]
+
+# Tabla
+tabla_mujeres <- tibble(
+  fecha = df_mujeres_semanal$fecha_semana,
+  semana = isoweek(fecha),
+  mes = month(fecha, label = TRUE, abbr = TRUE),
+  estacionalidad = estacionalidad_mujeres
+)
+
+# Promedio por semana
+promedios_mujeres <- tabla_mujeres |> 
+  group_by(semana) |> 
+  summarise(promedio = mean(estacionalidad), .groups = "drop")
+
+# Top 3 semanas
+top_semanas_m <- promedios_mujeres |> 
+  slice_max(order_by = promedio, n = 3) |> 
+  pull(semana)
+
+# Gráfico
+tabla_mujeres <- tabla_mujeres |> 
+  mutate(destacada = ifelse(semana %in% top_semanas_m, "Sí", "No"))
+
+# Crear semana_mes para eje X
+tabla_mujeres <- tabla_mujeres |> 
+  mutate(
+    anio = year(fecha),
+    mes = month(fecha, label = TRUE, abbr = TRUE),
+    semana_mes = paste0(semana, "\n", mes)
+  )
+
+# Gráfico final con curva Loess
+ggplot(tabla_mujeres, aes(x = semana_mes, y = estacionalidad, fill = destacada)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_smooth(aes(group = 1), method = "loess", se = TRUE, color = "purple", fill = "purple", alpha = 0.2, linewidth = 1.2) +
+  scale_fill_manual(values = c("Sí" = "purple", "No" = "plum")) +
+  scale_x_discrete(
+    breaks = levels(factor(tabla_mujeres$semana_mes))[seq(1, length(unique(tabla_mujeres$semana_mes)), by = 2)]
+  ) +
+  scale_y_continuous(
+    breaks = seq(floor(min(tabla_mujeres$estacionalidad)), 
+                 ceiling(max(tabla_mujeres$estacionalidad)), 
+                 by = 0.2)
+  ) +
+  labs(title = "Estacionalidad semanal en mujeres (11–19 años, 2014–2019)",
+       subtitle = "Con tendencia suavizada (Loess) e intervalo de confianza",
+       x = "Semana\nMes",
+       y = "Variación estacional") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#----------------------------------------------
+# Pegar gráficos
+#----------------------------------------------
+
+library(cowplot)
+
+# Crear objetos de los gráficos (asumiendo que ya tienes `plot_hombres` y `plot_mujeres`)
+plot_hombres <- ggplot(tabla_hombres, aes(x = semana_mes, y = estacionalidad, fill = destacada)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_smooth(aes(group = 1), method = "loess", se = TRUE, color = "red", fill = "red", alpha = 0.2, linewidth = 1.2) +
+  scale_fill_manual(values = c("Sí" = "red", "No" = "skyblue")) +
+  scale_x_discrete(
+    breaks = levels(factor(tabla_hombres$semana_mes))[seq(1, length(unique(tabla_hombres$semana_mes)), by = 2)]
+  ) +
+  scale_y_continuous(
+    breaks = seq(floor(min(tabla_hombres$estacionalidad)), 
+                 ceiling(max(tabla_hombres$estacionalidad)), 
+                 by = 0.2)
+  ) +
+  labs(title = "Estacionalidad semanal en hombres (11–19 años, 2014–2019)",
+       subtitle = "Se destaca cambio de pendiente significativo según regresión segmentada (VITSA)",
+       x = "Semana\nMes",
+       y = "Variación estacional") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot_mujeres <- ggplot(tabla_mujeres, aes(x = semana_mes, y = estacionalidad, fill = destacada)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_smooth(aes(group = 1), method = "loess", se = TRUE, color = "purple", fill = "purple", alpha = 0.2, linewidth = 1.2) +
+  scale_fill_manual(values = c("Sí" = "purple", "No" = "plum")) +
+  scale_x_discrete(
+    breaks = levels(factor(tabla_mujeres$semana_mes))[seq(1, length(unique(tabla_mujeres$semana_mes)), by = 2)]
+  ) +
+  scale_y_continuous(
+    breaks = seq(floor(min(tabla_mujeres$estacionalidad)), 
+                 ceiling(max(tabla_mujeres$estacionalidad)), 
+                 by = 0.2)
+  ) +
+  labs(title = "Estacionalidad semanal en mujeres (11–19 años, 2014–2019)",
+       subtitle = "Se destaca cambio de pendiente significativo según regresión segmentada (VITSA)",
+       x = "Semana\nMes",
+       y = "Variación estacional") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Usamos cowplot para combinarlos verticalmente
+plot_grid(plot_hombres, plot_mujeres, 
+          ncol = 1,  # uno arriba del otro
+          align = "v", 
+          label_size = 14)
+
